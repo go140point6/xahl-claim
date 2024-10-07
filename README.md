@@ -1,6 +1,6 @@
 # xahl-claim
 
-Note: This script is mostly derived from [@gadget78](https://github.com/gadget78/Evernode-Deploy-Monitor) with lots of help from [@tequdev]https://github.com/tequdev/xahau-reward-claim. I just lifted the parts I wanted and refactored it the way I like to structure my projects. I would very likely never have figured out how to make this work without both making their repos available.
+Note: This script is mostly derived from [@gadget78](https://github.com/gadget78/Evernode-Deploy-Monitor) with lots of help from [@tequdev](https://github.com/tequdev/xahau-reward-claim). I just lifted the parts I wanted and refactored it the way I like to structure my projects. I would very likely never have figured out how to make this work without both making their repos available.
 
 Script which automates XAH Ledger's balance claim adjustment.
 - Works for TESTNET and MAINNET.
