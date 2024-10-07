@@ -3,7 +3,10 @@ require('log-timestamp');
 const { XrplClient } = require('xrpl-client');
 const lib = require('xrpl-accountlib');
 const fs = require('fs');
+const cron = require('node-cron');
+const cronSchedule = process.env.CRON_SCHED;
 const { parse } = require('csv-parse');
+const { get_exponent, get_mantissa, is_negative, to_string, xflToFloat, changeEndianness, hookStateXLFtoBigNumber, calcrewardRateHuman, calcrewardDelayHuman } = require('./shared/helpers');
 
 addressesToCollect = []
 const use_testnet = process.env.USE_TESTNET === 'true' ? true : false
@@ -37,68 +40,75 @@ async function networkSetup() {
 
 async function main() {
   await networkSetup()
-  const client = new XrplClient(xahaud)
+  console.log(`Starting balance adjustment check using ${xahaud}...`)
+  const balanceAdjCheck = cron.schedule(cronSchedule, async () => {
+    const client = new XrplClient(xahaud)
 
-  const liveDefinitions = await client.send({ "command": "server_definitions" })
-  const definitions = new lib.XrplDefinitions(liveDefinitions)
+    const liveDefinitions = await client.send({ "command": "server_definitions" })
+    const definitions = new lib.XrplDefinitions(liveDefinitions)
 
-  let rewardDelay = await client.send({
-    command: 'ledger_entry',
-    hook_state: {
-      account: 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh',
-      key: '0000000000000000000000000000000000000000000000000000000000005244', // RD
-      namespace_id: '0000000000000000000000000000000000000000000000000000000000000000'
-    }
-  })
-
-  rewardDelay = hookStateXLFtoBigNumber(rewardDelay.node['HookStateData'])
-
-  const reg_key_acct = lib.derive.familySeed(seed)
-
-  for (const account of addressesToCollect) {
-    console.log(account)
-    const { account_data } = await client.send({ command: "account_info", account })
-    console.log(account_data)
-    const { ledger } = await client.send({ command: 'ledger', ledger_index: 'validated' })
-
-    const RewardTime = account_data?.RewardTime || 0
-    const remainingSec = rewardDelay - (ledger.close_time - RewardTime)
-    const claimable = remainingSec <= 0
-    const now = new Date()
-    const claimableDate = new Date(now.getTime() + remainingSec * 1000)
-    const claimableTime = calcrewardDelayHuman(remainingSec)
-  
-    if (claimable) {
-      console.log(`Ready, attempting claim...`)
-  
-      const { account_data: { Sequence: sequence } } = await client.send({ command: "account_info", account: account })
-      let claimTx = {
-        Account: account,
-        TransactionType: 'ClaimReward',
-        Issuer: 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh',
-        NetworkID: networkID,
-        Sequence: sequence,
-        Fee: "0",
-        SigningPubKey: "",
+    let rewardDelay = await client.send({
+      command: 'ledger_entry',
+      hook_state: {
+        account: 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh',
+        key: '0000000000000000000000000000000000000000000000000000000000005244', // RD
+        namespace_id: '0000000000000000000000000000000000000000000000000000000000000000'
       }
-    
-      const encoded = lib.binary.encode(claimTx, definitions)
+    })
 
-      let networkInfo = await lib.utils.txNetworkAndAccountValues(xahaud, account)
-      claimTx = { ...claimTx, ...networkInfo.txValues }
-      let { response: { engine_result: claimTxResult } } = await lib.signAndSubmit(claimTx, xahaud, reg_key_acct)
+    rewardDelay = hookStateXLFtoBigNumber(rewardDelay.node['HookStateData'])
 
-      if ( claimTxResult !== "tesSUCCESS" && claimTxResult !== "tesQUEUED" ) {
-        console.log("Claim failed")
+    const reg_key_acct = lib.derive.familySeed(seed)
+
+    for (const account of addressesToCollect) {
+      const { account_data } = await client.send({ command: "account_info", account })
+      const { ledger } = await client.send({ command: 'ledger', ledger_index: 'validated' })
+      let claimable = false
+
+      if ( account_data?.RewardLgrFirst === undefined ) {
+        console.log(`${account} doesn't appear to be registered for balance adjustment, perhaps you are on the wrong network (TESTNET vs MAINNET)?`)
+        continue
       } else {
-        console.log("Claim succeeded")
+        const RewardTime = account_data?.RewardTime || 0
+        const remainingSec = rewardDelay - (ledger.close_time - RewardTime)
+        claimable = remainingSec <= 0
+        const now = new Date()
+        const claimableDate = new Date(now.getTime() + remainingSec * 1000)
+        const claimableTime = calcrewardDelayHuman(remainingSec)  
       }
-    } else {
-      console.log("Not ready to claim.")
-    }
-  }
 
-  client.close()
+      if (claimable) {
+        console.log(`${account} is ready to claim, attempting...`)
+    
+        const { account_data: { Sequence: sequence } } = await client.send({ command: "account_info", account: account })
+        let claimTx = {
+          Account: account,
+          TransactionType: 'ClaimReward',
+          Issuer: 'rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh',
+          NetworkID: networkID,
+          Sequence: sequence,
+          Fee: "0",
+          SigningPubKey: "",
+        }
+      
+        const encoded = lib.binary.encode(claimTx, definitions)
+
+        let networkInfo = await lib.utils.txNetworkAndAccountValues(xahaud, account)
+        claimTx = { ...claimTx, ...networkInfo.txValues }
+        let { response: { engine_result: claimTxResult } } = await lib.signAndSubmit(claimTx, xahaud, reg_key_acct)
+
+        if ( claimTxResult !== "tesSUCCESS" && claimTxResult !== "tesQUEUED" ) {
+          console.log(`Claim failed on ${account} for some reason.`)
+        } else {
+          console.log(`Claim succeeded on ${account}.`)
+        }
+      } else {
+        console.log(`The account ${account} is not ready to claim, trying again later...`)
+      }
+    }
+
+    client.close()
+  })
 }
 
 createArray.then(() => {
@@ -106,70 +116,3 @@ createArray.then(() => {
 }).catch((err) => {
     console.error(err)
 })
-
-// claim reward functions .............................................
-function get_exponent(xfl) {
-    if (xfl < 0n)
-      throw new Error("Invalid XFL");
-    if (xfl == 0n)
-      return 0n;
-    return ((xfl >> 54n) & 0xFFn) - 97n;
-  }
-  
-  function get_mantissa(xfl) {
-    if (xfl < 0n)
-      throw new Error("Invalid XFL");
-    if (xfl == 0n)
-      return 0n;
-    return xfl - ((xfl >> 54n) << 54n);
-  }
-  
-  function is_negative(xfl) {
-    if (xfl < 0n)
-      throw new Error("Invalid XFL");
-    if (xfl == 0n)
-      return false;
-    return ((xfl >> 62n) & 1n) == 0n;
-  }
-  
-  function to_string(xfl) {
-    if (xfl < 0n)
-      throw new Error("Invalid XFL");
-    if (xfl == 0n)
-      return "<zero>";
-    return (is_negative(xfl) ? "-" : "+") +
-      get_mantissa(xfl).toString() + "E" + get_exponent(xfl).toString();
-  }
-  
-  function xflToFloat(xfl) {
-    return parseFloat(to_string(xfl));
-  }
-  
-  function changeEndianness(str){
-    const result = [];
-    let len = str.length - 2;
-    while (len >= 0) {
-      result.push(str.substr(len, 2));
-      len -= 2;
-    }
-    return result.join('');
-  }
-  
-  function hookStateXLFtoBigNumber(stateData) {
-    const data = changeEndianness(stateData);
-    const bi = BigInt('0x' + data);
-    return xflToFloat(bi);
-  }
-  
-  function calcrewardRateHuman(rewardRate) {
-    if (!rewardRate) return "0 %";
-    if (rewardRate < 0 || rewardRate > 1) return "Invalid rate";
-    return (Math.round((((1 + rewardRate) ** 12) - 1) * 10000) / 100) + " %";
-  }
-  
-  function calcrewardDelayHuman(rewardDelay) {
-    if (rewardDelay / 3600 < 1) return Math.ceil(rewardDelay / 60) + " mins";
-    if (rewardDelay / (3600 * 24) < 1) return Math.ceil(rewardDelay / 3600) + " hours";
-    return Math.ceil(rewardDelay / (3600 * 24)) + ' days';
-  }
-

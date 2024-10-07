@@ -3,6 +3,7 @@
     "csv-parse": "^5.5.3",
     "dotenv": "^16.4.1",
     "log-timestamp": "^0.3.0",
+    "node-cron": "^3.0.3",
     "xrpl-accountlib": "^3.6.3",
     "xrpl-client": "^2.4.0"
   }
