@@ -129,3 +129,5 @@ dist
 .yarn/install-state.gz
 .pnp.*
 data/addresses-prod.csv
+ecosystem.config.js
+data/addresses.csv

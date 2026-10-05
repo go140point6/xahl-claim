@@ -108,7 +108,7 @@ async function main() {
     }
 
     client.close()
-  })
+  }, { noOverlap: true })
 }
 
 createArray.then(() => {
